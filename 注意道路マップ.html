@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>注意道路マップ</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    html, body { height: 100%; background: #f5f4f0; font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', 'Noto Sans JP', sans-serif; }
+    #app { display: flex; flex-direction: column; height: 100svh; min-height: 500px; }
+
+    #toolbar {
+      background: #fff;
+      border-bottom: 1px solid #e5e3dd;
+      padding: 8px 10px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      z-index: 1000;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    #toolbar::-webkit-scrollbar { display: none; }
+    .tool-title { font-size: 13px; font-weight: 600; color: #2c2c2a; white-space: nowrap; margin-right: 4px; }
+
+    .tool-btn {
+      border: 1px solid #d3d1c7;
+      background: #fff;
+      color: #5f5e5a;
+      min-width: 52px;
+      min-height: 52px;
+      padding: 6px 10px;
+      border-radius: 10px;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 2px;
+      flex-shrink: 0;
+      transition: background 0.12s;
+    }
+    .tool-btn:active { transform: scale(0.94); }
+    .tool-btn .icon  { font-size: 20px; }
+    .tool-btn .label { font-size: 10px; color: inherit; }
+    .tool-btn.active-red { background: #faece7; border-color: #f0997b; color: #993c1d; }
+    .tool-btn.active-del { background: #faece7; border-color: #f0997b; color: #993c1d; }
+
+    #status-bar {
+      font-size: 12px; color: #888780;
+      padding: 5px 12px;
+      background: #f1efe8;
+      border-bottom: 1px solid #e5e3dd;
+      min-height: 26px; line-height: 1.4;
+      display: flex; align-items: center; gap: 8px;
+    }
+    #sync-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #ccc; flex-shrink: 0; transition: background 0.3s;
+    }
+    #sync-dot.synced  { background: #639922; }
+    #sync-dot.syncing { background: #EF9F27; }
+    #sync-dot.error   { background: #E24B4A; }
+
+    #map-wrap { flex: 1; position: relative; }
+    #map { width: 100%; height: 100%; }
+
+    #fab-confirm {
+      position: absolute; bottom: 24px; right: 14px;
+      width: 62px; height: 62px; border-radius: 50%;
+      background: #3b6d11; border: none; color: #c0dd97;
+      font-size: 28px; cursor: pointer; z-index: 2000;
+      display: none; align-items: center; justify-content: center;
+      box-shadow: 0 3px 10px rgba(0,0,0,0.22);
+    }
+    #fab-confirm.show { display: flex; }
+    #fab-confirm:active { transform: scale(0.92); }
+
+    #legend {
+      position: absolute; bottom: 14px; left: 14px;
+      background: rgba(255,255,255,0.92);
+      border: 1px solid #e5e3dd; border-radius: 10px;
+      padding: 8px 12px; z-index: 1500;
+      font-size: 11px; color: #888780;
+    }
+    #legend div { display: flex; align-items: center; gap: 6px; }
+    .legend-line { width: 20px; height: 5px; border-radius: 2px; background: #D85A30; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <div id="toolbar">
+    <span class="tool-title">⚠ 注意道路マップ</span>
+    <button class="tool-btn" id="btn-narrow" onclick="setMode('narrow')">
+      <span class="icon">🔴</span><span class="label">道を描く</span>
+    </button>
+    <button class="tool-btn" id="btn-delete" onclick="setMode('delete')">
+      <span class="icon">🗑</span><span class="label">削除</span>
+    </button>
+    <button class="tool-btn" onclick="undoLast()">
+      <span class="icon">↩</span><span class="label">元に戻す</span>
+    </button>
+    <button class="tool-btn" onclick="gotoCurrentLocation()">
+      <span class="icon">🎯</span><span class="label">現在地</span>
+    </button>
+  </div>
+
+  <div id="status-bar">
+    <span id="sync-dot"></span>
+    <span id="status-text">Firebase に接続中...</span>
+  </div>
+
+  <div id="map-wrap">
+    <div id="map"></div>
+    <button id="fab-confirm" onclick="finishLine()">✓</button>
+    <div id="legend">
+      <div><span class="legend-line"></span>注意が必要な道</div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ── Firebase 初期化 ──────────────────────────────
+  firebase.initializeApp({
+    apiKey: "AIzaSyDo9pbYk6uJci5I8DyBdEhxh25jdy_uUos",
+    authDomain: "narrow-road-map.firebaseapp.com",
+    databaseURL: "https://narrow-road-map-default-rtdb.asia-southeast1.firebasedatabase.app",
+    projectId: "narrow-road-map",
+    storageBucket: "narrow-road-map.firebasestorage.app",
+    messagingSenderId: "483983687799",
+    appId: "1:483983687799:web:fe19290136c30359740672"
+  });
+  const db = firebase.database();
+  const pathsRef = db.ref('paths');
+
+  // ── 状態 ────────────────────────────────────────
+  let map, mode = null, drawing = false;
+  let currentPoints = [], tempLine = null;
+  let layerMap = {};
+  let lastAddedKey = null;
+
+  // ── 地図初期化 ───────────────────────────────────
+  function initMap() {
+    map = L.map('map', { doubleClickZoom: false, tap: true, tapTolerance: 15 })
+           .setView([35.1815, 136.9066], 15);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      maxZoom: 19,
+    }).addTo(map);
+
+    map.on('click', onMapClick);
+    map.on('dblclick', onMapDblClick);
+
+    // Firebase リアルタイム同期
+    setSyncDot('syncing');
+
+    pathsRef.on('child_added', snap => {
+      addLayerFromData(snap.key, snap.val());
+      setStatus('同期済み（' + Object.keys(layerMap).length + ' 件）');
+      setSyncDot('synced');
+    });
+
+    pathsRef.on('child_removed', snap => {
+      const layer = layerMap[snap.key];
+      if (layer) { map.removeLayer(layer); delete layerMap[snap.key]; }
+      setStatus('同期済み（' + Object.keys(layerMap).length + ' 件）');
+      setSyncDot('synced');
+    });
+
+    db.ref('.info/connected').on('value', snap => {
+      if (snap.val()) {
+        setSyncDot('synced');
+        setStatus('接続済み（' + Object.keys(layerMap).length + ' 件）');
+      } else {
+        setSyncDot('error');
+        setStatus('オフライン — 再接続を待っています');
+      }
+    });
+  }
+
+  // ── Firebase からレイヤー追加 ────────────────────
+  function addLayerFromData(key, d) {
+    if (layerMap[key]) return;
+    const layer = L.polyline(d.points, { color: '#D85A30', weight: 8, opacity: 0.85 });
+    layer._fbKey = key;
+    layer.on('click', ev => {
+      if (mode === 'delete') { deleteFromFirebase(key); L.DomEvent.stopPropagation(ev); }
+    });
+    layer.addTo(map);
+    layerMap[key] = layer;
+  }
+
+  // ── モード切替 ───────────────────────────────────
+  function setMode(m) {
+    if (drawing) cancelDrawing();
+    mode = (mode === m) ? null : m;
+    document.getElementById('btn-narrow').className = 'tool-btn' + (mode === 'narrow' ? ' active-red' : '');
+    document.getElementById('btn-delete').className = 'tool-btn' + (mode === 'delete' ? ' active-del' : '');
+    const msgs = {
+      narrow: '道を描く：タップで点を追加 → ✓ で確定',
+      delete: '削除：消したい線をタップ',
+    };
+    setStatus(mode ? msgs[mode] : '同期済み（' + Object.keys(layerMap).length + ' 件）');
+  }
+
+  // ── 地図クリック ─────────────────────────────────
+  function onMapClick(e) {
+    if (mode !== 'narrow') return;
+    drawing = true;
+    currentPoints.push([e.latlng.lat, e.latlng.lng]);
+    updateTempLine();
+    document.getElementById('fab-confirm').classList.add('show');
+    setStatus(currentPoints.length + ' 点追加済み — ✓ で確定');
+  }
+
+  function onMapDblClick(e) {
+    if (!drawing) return;
+    currentPoints.push([e.latlng.lat, e.latlng.lng]);
+    finishLine();
+  }
+
+  function updateTempLine() {
+    if (tempLine) map.removeLayer(tempLine);
+    if (currentPoints.length < 2) return;
+    tempLine = L.polyline(currentPoints, { color: '#D85A30', weight: 8, opacity: 0.4, dashArray: '7,5' }).addTo(map);
+  }
+
+  // ── 線確定 → Firebase 保存 ───────────────────────
+  function finishLine() {
+    if (currentPoints.length < 2) {
+      cancelDrawing();
+      setStatus('2点以上タップしてから確定してください');
+      return;
+    }
+    if (tempLine) { map.removeLayer(tempLine); tempLine = null; }
+    const newRef = pathsRef.push();
+    lastAddedKey = newRef.key;
+    newRef.set({ points: currentPoints });
+    drawing = false; currentPoints = [];
+    document.getElementById('fab-confirm').classList.remove('show');
+    setSyncDot('syncing');
+  }
+
+  function cancelDrawing() {
+    drawing = false; currentPoints = [];
+    if (tempLine) { map.removeLayer(tempLine); tempLine = null; }
+    document.getElementById('fab-confirm').classList.remove('show');
+  }
+
+  // ── Firebase から削除 ────────────────────────────
+  function deleteFromFirebase(key) {
+    pathsRef.child(key).remove();
+    setSyncDot('syncing');
+  }
+
+  // ── 元に戻す ─────────────────────────────────────
+  function undoLast() {
+    if (drawing) { cancelDrawing(); setStatus('描画をキャンセルしました'); return; }
+    if (!lastAddedKey) { setStatus('元に戻す操作はありません'); return; }
+    deleteFromFirebase(lastAddedKey);
+    lastAddedKey = null;
+  }
+
+  // ── 現在地 ───────────────────────────────────────
+  function gotoCurrentLocation() {
+    if (!navigator.geolocation) { setStatus('現在地取得に非対応の環境です'); return; }
+    setStatus('現在地を取得中...');
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        const ll = [pos.coords.latitude, pos.coords.longitude];
+        map.setView(ll, 17);
+        L.circleMarker(ll, {
+          radius: 9, color: '#185FA5', fillColor: '#378ADD', fillOpacity: 0.9, weight: 2
+        }).addTo(map).bindPopup('現在地').openPopup();
+        setStatus('現在地に移動しました');
+      },
+      () => setStatus('現在地の取得に失敗しました')
+    );
+  }
+
+  // ── UI ヘルパー ──────────────────────────────────
+  function setStatus(msg) { document.getElementById('status-text').textContent = msg; }
+  function setSyncDot(s) { document.getElementById('sync-dot').className = s; }
+
+  window.addEventListener('load', initMap);
+</script>
+</body>
+</html>
