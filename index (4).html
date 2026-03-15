@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>注意道路マップ</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    html, body { height: 100%; background: #f5f4f0; font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', 'Noto Sans JP', sans-serif; }
+    #app { display: flex; flex-direction: column; height: 100svh; min-height: 500px; }
+
+    #toolbar {
+      background: #fff; border-bottom: 1px solid #e5e3dd;
+      padding: 8px 10px; display: flex; align-items: center; gap: 6px;
+      z-index: 1000; overflow-x: auto; scrollbar-width: none;
+    }
+    #toolbar::-webkit-scrollbar { display: none; }
+    .tool-title { font-size: 13px; font-weight: 600; color: #2c2c2a; white-space: nowrap; margin-right: 4px; }
+    .tool-btn {
+      border: 1px solid #d3d1c7; background: #fff; color: #5f5e5a;
+      min-width: 52px; min-height: 52px; padding: 6px 10px; border-radius: 10px;
+      cursor: pointer; display: flex; flex-direction: column; align-items: center;
+      justify-content: center; gap: 2px; flex-shrink: 0; transition: background 0.12s;
+    }
+    .tool-btn:active { transform: scale(0.94); }
+    .tool-btn .icon  { font-size: 20px; }
+    .tool-btn .label { font-size: 10px; color: inherit; }
+    .tool-btn.active-red  { background: #faece7; border-color: #f0997b; color: #993c1d; }
+    .tool-btn.active-blue { background: #e6f1fb; border-color: #85b7eb; color: #185fa5; }
+    .tool-btn.active-del  { background: #faece7; border-color: #f0997b; color: #993c1d; }
+
+    #search-bar {
+      background: #fff; border-bottom: 1px solid #e5e3dd;
+      padding: 8px 10px; display: flex; gap: 6px; align-items: center; z-index: 1000;
+    }
+    #search-input {
+      flex: 1; height: 40px; padding: 0 12px;
+      border: 1px solid #d3d1c7; border-radius: 10px;
+      font-size: 14px; color: #2c2c2a; outline: none; background: #f7f6f3;
+    }
+    #search-input:focus { border-color: #85b7eb; background: #fff; }
+    #search-btn {
+      height: 40px; padding: 0 14px;
+      background: #185fa5; color: #fff; border: none;
+      border-radius: 10px; font-size: 13px; font-weight: 600;
+      cursor: pointer; white-space: nowrap; flex-shrink: 0;
+    }
+    #search-btn:active { transform: scale(0.96); }
+    #search-btn.loading { background: #aaa; pointer-events: none; }
+
+    #search-results {
+      position: absolute; top: 0; left: 0; right: 0;
+      background: #fff; border-bottom: 1px solid #e5e3dd;
+      z-index: 2500; display: none;
+      max-height: 260px; overflow-y: auto;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+    .search-result-item {
+      padding: 13px 14px; border-bottom: 0.5px solid #f1efe8;
+      font-size: 13px; color: #2c2c2a; cursor: pointer; line-height: 1.5;
+      display: flex; align-items: flex-start; gap: 10px;
+    }
+    .search-result-item:active { background: #f1efe8; }
+    .result-icon { font-size: 15px; flex-shrink: 0; margin-top: 1px; }
+    .result-main { font-weight: 500; }
+    .result-sub  { font-size: 11px; color: #888; margin-top: 2px; }
+    .search-no-result { padding: 16px; font-size: 13px; color: #888; text-align: center; line-height: 1.9; }
+
+    #status-bar {
+      font-size: 12px; color: #888780; padding: 5px 12px;
+      background: #f1efe8; border-bottom: 1px solid #e5e3dd;
+      min-height: 26px; display: flex; align-items: center; gap: 8px;
+    }
+    #sync-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #ccc; flex-shrink: 0; transition: background 0.3s;
+    }
+    #sync-dot.synced  { background: #639922; }
+    #sync-dot.syncing { background: #EF9F27; }
+    #sync-dot.error   { background: #E24B4A; }
+
+    #map-wrap { flex: 1; position: relative; }
+    #map { width: 100%; height: 100%; }
+
+    #fab-confirm {
+      position: absolute; bottom: 24px; right: 14px;
+      width: 62px; height: 62px; border-radius: 50%;
+      background: #3b6d11; border: none; color: #c0dd97;
+      font-size: 28px; cursor: pointer; z-index: 2000;
+      display: none; align-items: center; justify-content: center;
+      box-shadow: 0 3px 10px rgba(0,0,0,0.22);
+    }
+    #fab-confirm.show { display: flex; }
+    #fab-confirm:active { transform: scale(0.92); }
+
+    #legend {
+      position: absolute; bottom: 14px; left: 14px;
+      background: rgba(255,255,255,0.93); border: 1px solid #e5e3dd;
+      border-radius: 10px; padding: 8px 12px; z-index: 1500;
+      font-size: 11px; color: #888780;
+    }
+    #legend div { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+    .leg-red  { width: 20px; height: 5px; border-radius: 2px; background: #D85A30; }
+    .leg-blue { width: 20px; height: 5px; border-radius: 2px; background: #378ADD; }
+
+    .bottom-sheet {
+      position: absolute; bottom: 0; left: 0; right: 0;
+      background: #fff; border-top: 1px solid #e5e3dd;
+      border-radius: 18px 18px 0 0; padding: 14px 16px 40px;
+      z-index: 3000; transform: translateY(100%); transition: transform 0.25s ease;
+    }
+    .bottom-sheet.open { transform: translateY(0); }
+    .sheet-handle { width: 36px; height: 4px; background: #d3d1c7; border-radius: 2px; margin: 0 auto 14px; }
+    .sheet-title  { font-size: 15px; font-weight: 600; color: #2c2c2a; margin-bottom: 4px; }
+    .sheet-sub    { font-size: 12px; color: #888780; margin-bottom: 16px; line-height: 1.6; }
+    .sheet-btns   { display: flex; gap: 8px; margin-top: 16px; }
+    .sheet-btn {
+      flex: 1; padding: 14px; font-size: 14px; border-radius: 10px;
+      cursor: pointer; border: 1px solid #d3d1c7; background: #fff; color: #2c2c2a;
+    }
+    .sheet-btn:active { transform: scale(0.97); }
+    .sheet-btn-primary { background: #185fa5; color: #fff; border-color: #185fa5; font-weight: 600; }
+    .sheet-btn-danger  { background: #faece7; color: #993c1d; border-color: #f0997b; font-weight: 600; }
+
+    .tag-select-wrap { position: relative; }
+    .tag-select-wrap::after {
+      content: '▼'; font-size: 11px; color: #888;
+      position: absolute; right: 14px; top: 50%; transform: translateY(-50%);
+      pointer-events: none;
+    }
+    .tag-dropdown {
+      width: 100%; padding: 14px 36px 14px 14px;
+      font-size: 15px; color: #2c2c2a;
+      border: 1px solid #d3d1c7; border-radius: 10px;
+      background: #fff; appearance: none; -webkit-appearance: none;
+      cursor: pointer; outline: none;
+    }
+    .tag-dropdown:focus { border-color: #85b7eb; }
+
+    .selected-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; min-height: 28px; }
+    .selected-tag {
+      display: flex; align-items: center; gap: 4px;
+      font-size: 12px; padding: 4px 10px; border-radius: 20px;
+      background: #e6f1fb; color: #185fa5; font-weight: 500;
+    }
+    .selected-tag .remove { font-size: 14px; line-height: 1; cursor: pointer; color: #378ADD; margin-left: 2px; }
+    .no-tag { font-size: 12px; color: #bbb; padding: 4px 0; }
+
+    .leaflet-popup-content-wrapper { border-radius: 12px !important; box-shadow: 0 4px 16px rgba(0,0,0,0.15) !important; padding: 0 !important; }
+    .leaflet-popup-content { margin: 0 !important; }
+    .popup-inner  { padding: 12px 16px; min-width: 180px; }
+    .popup-type   { font-size: 11px; font-weight: 600; letter-spacing: 0.5px; margin-bottom: 8px; }
+    .popup-type.red  { color: #993c1d; }
+    .popup-type.blue { color: #185fa5; }
+    .popup-tags   { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+    .popup-tag    { font-size: 11px; padding: 3px 8px; border-radius: 20px; background: #e6f1fb; color: #185fa5; font-weight: 500; }
+    .popup-time   { font-size: 10px; color: #aaa; line-height: 1.8; border-top: 0.5px solid #f1efe8; padding-top: 6px; margin-top: 4px; }
+    .popup-time span { display: block; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <div id="toolbar">
+    <span class="tool-title">⚠ 注意道路マップ</span>
+    <button class="tool-btn" id="btn-red" onclick="setMode('red')">
+      <span class="icon">🔴</span><span class="label">クレーム</span>
+    </button>
+    <button class="tool-btn" id="btn-blue" onclick="setMode('blue')">
+      <span class="icon">🔵</span><span class="label">注意道路</span>
+    </button>
+    <button class="tool-btn" id="btn-delete" onclick="setMode('delete')">
+      <span class="icon">🗑</span><span class="label">削除</span>
+    </button>
+    <button class="tool-btn" onclick="undoLast()">
+      <span class="icon">↩</span><span class="label">元に戻す</span>
+    </button>
+    <button class="tool-btn" onclick="gotoCurrentLocation()">
+      <span class="icon">🎯</span><span class="label">現在地</span>
+    </button>
+  </div>
+
+  <div id="search-bar">
+    <input id="search-input" type="text"
+      placeholder="例：名古屋市中区栄1-2-3"
+      onkeydown="if(event.key==='Enter'){event.preventDefault();doSearch();}" />
+    <button id="search-btn" onclick="doSearch()">検索</button>
+  </div>
+
+  <div id="status-bar">
+    <span id="sync-dot"></span>
+    <span id="status-text">Firebase に接続中...</span>
+  </div>
+
+  <div id="map-wrap">
+    <div id="search-results"></div>
+    <div id="map"></div>
+    <button id="fab-confirm" onclick="finishLine()">✓</button>
+
+    <div id="legend">
+      <div><span class="leg-red"></span>クレーム</div>
+      <div><span class="leg-blue"></span>注意道路</div>
+    </div>
+
+    <div id="sheet-type" class="bottom-sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-title">🔵 注意道路の種別を選択</div>
+      <div class="sheet-sub">該当する種別を選んで追加できます（複数可）</div>
+      <div class="tag-select-wrap">
+        <select class="tag-dropdown" id="tag-dropdown" onchange="addTagFromDropdown(this)">
+          <option value="">-- 種別を選択 --</option>
+          <option value="私道">私道</option>
+          <option value="狭小路">狭小路</option>
+          <option value="高さ制限">高さ制限</option>
+          <option value="幅員制限">幅員制限</option>
+          <option value="未舗装道路">未舗装道路</option>
+          <option value="臨時工事中">臨時工事中</option>
+        </select>
+      </div>
+      <div class="selected-tags" id="selected-tags">
+        <span class="no-tag">種別未選択（選択なしでも登録できます）</span>
+      </div>
+      <div class="sheet-btns">
+        <button class="sheet-btn" onclick="cancelSheet()">キャンセル</button>
+        <button class="sheet-btn sheet-btn-primary" onclick="confirmSheet()">登録する</button>
+      </div>
+    </div>
+
+    <div id="sheet-delete" class="bottom-sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-title">🗑 この線を削除しますか？</div>
+      <div class="sheet-sub" id="delete-info">削除すると元に戻せません。</div>
+      <div class="sheet-btns">
+        <button class="sheet-btn" onclick="cancelDelete()">キャンセル</button>
+        <button class="sheet-btn sheet-btn-danger" onclick="confirmDelete()">削除する</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  firebase.initializeApp({
+    apiKey: "AIzaSyDo9pbYk6uJci5I8DyBdEhxh25jdy_uUos",
+    authDomain: "narrow-road-map.firebaseapp.com",
+    databaseURL: "https://narrow-road-map-default-rtdb.asia-southeast1.firebasedatabase.app",
+    projectId: "narrow-road-map",
+    storageBucket: "narrow-road-map.firebasestorage.app",
+    messagingSenderId: "483983687799",
+    appId: "1:483983687799:web:fe19290136c30359740672"
+  });
+  const db = firebase.database();
+  const pathsRef = db.ref('paths');
+
+  let map, mode = null, drawing = false;
+  let currentPoints = [], tempLine = null;
+  let layerMap = {}, lastAddedKey = null;
+  let pendingPoints = null, pendingDeleteKey = null;
+  let selectedTags = [], searchMarker = null;
+
+  function formatTs(ts) {
+    if (!ts) return '—';
+    const d = new Date(ts);
+    const p = n => String(n).padStart(2, '0');
+    return d.getFullYear() + '/' + p(d.getMonth()+1) + '/' + p(d.getDate())
+         + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+
+  function initMap() {
+    map = L.map('map', { doubleClickZoom: false, tap: true, tapTolerance: 15 })
+           .setView([35.1815, 136.9066], 15);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      maxZoom: 19,
+    }).addTo(map);
+    map.on('click', e => { hideResults(); onMapClick(e); });
+    map.on('dblclick', onMapDblClick);
+
+    setSyncDot('syncing');
+    pathsRef.on('child_added', snap => { addLayerFromData(snap.key, snap.val()); setStatus('同期済み（' + Object.keys(layerMap).length + ' 件）'); setSyncDot('synced'); });
+    pathsRef.on('child_changed', snap => { if (layerMap[snap.key]) { map.removeLayer(layerMap[snap.key]); delete layerMap[snap.key]; } addLayerFromData(snap.key, snap.val()); setSyncDot('synced'); });
+    pathsRef.on('child_removed', snap => { if (layerMap[snap.key]) { map.removeLayer(layerMap[snap.key]); delete layerMap[snap.key]; } setStatus('同期済み（' + Object.keys(layerMap).length + ' 件）'); setSyncDot('synced'); });
+    db.ref('.info/connected').on('value', snap => {
+      if (snap.val()) { setSyncDot('synced'); setStatus('接続済み（' + Object.keys(layerMap).length + ' 件）'); }
+      else { setSyncDot('error'); setStatus('オフライン — 再接続を待っています'); }
+    });
+  }
+
+  // ── 検索（国土地理院 + Nominatimフォールバック）────
+  function doSearch() {
+    const q = document.getElementById('search-input').value.trim();
+    if (!q) return;
+    setSearchLoading(true);
+    hideResults();
+
+    // 国土地理院 住所検索API（番地まで対応）
+    const gsiUrl = 'https://msearch.gsi.go.jp/address-search/AddressSearch?q=' + encodeURIComponent(q);
+    fetch(gsiUrl)
+      .then(r => r.json())
+      .then(data => {
+        if (data && data.length > 0) {
+          showResults(data.slice(0, 8).map(item => ({
+            name: item.properties.title,
+            sub:  '',
+            lat:  item.geometry.coordinates[1],
+            lon:  item.geometry.coordinates[0],
+          })));
+        } else {
+          // フォールバック：Nominatim
+          fallbackNominatim(q);
+        }
+        setSearchLoading(false);
+      })
+      .catch(() => fallbackNominatim(q));
+  }
+
+  function fallbackNominatim(q) {
+    const url = 'https://nominatim.openstreetmap.org/search'
+      + '?format=json&q=' + encodeURIComponent(q)
+      + '&countrycodes=jp&limit=8&addressdetails=1&accept-language=ja';
+    fetch(url)
+      .then(r => r.json())
+      .then(data => {
+        setSearchLoading(false);
+        if (!data || data.length === 0) { showNoResult(q); return; }
+        showResults(data.map(item => {
+          const addr = item.address || {};
+          const name = addr.road || addr.neighbourhood || addr.suburb || item.display_name.split(',')[0];
+          const sub  = [addr.city || addr.town, addr.state].filter(Boolean).join(' ');
+          return { name, sub, lat: parseFloat(item.lat), lon: parseFloat(item.lon) };
+        }));
+      })
+      .catch(() => { setSearchLoading(false); showNoResult(q); });
+  }
+
+  function showResults(items) {
+    const box = document.getElementById('search-results');
+    box.innerHTML = '';
+    items.forEach(item => {
+      const div = document.createElement('div');
+      div.className = 'search-result-item';
+      div.innerHTML = '<span class="result-icon">📍</span><div>'
+        + '<div class="result-main">' + item.name + '</div>'
+        + (item.sub ? '<div class="result-sub">' + item.sub + '</div>' : '')
+        + '</div>';
+      div.onclick = () => selectResult(item.lat, item.lon, item.name);
+      box.appendChild(div);
+    });
+    box.style.display = 'block';
+  }
+
+  function showNoResult(q) {
+    const box = document.getElementById('search-results');
+    box.innerHTML = '<div class="search-no-result">「' + q + '」は見つかりませんでした<br>'
+      + '<span style="font-size:11px;">例：名古屋市中区栄1-2-3<br>都道府県から入力すると精度が上がります</span></div>';
+    box.style.display = 'block';
+    setStatus('見つかりませんでした');
+  }
+
+  function hideResults() { document.getElementById('search-results').style.display = 'none'; }
+
+  function selectResult(lat, lon, name) {
+    hideResults();
+    document.getElementById('search-input').value = name;
+    map.setView([lat, lon], 17);
+    if (searchMarker) map.removeLayer(searchMarker);
+    searchMarker = L.marker([lat, lon]).addTo(map)
+      .bindPopup('<div style="font-size:13px;padding:4px 6px;">' + name + '</div>')
+      .openPopup();
+    setStatus('「' + name + '」に移動しました');
+  }
+
+  function setSearchLoading(on) {
+    const btn = document.getElementById('search-btn');
+    btn.textContent = on ? '検索中...' : '検索';
+    btn.className = on ? 'loading' : '';
+  }
+
+  // ── レイヤー追加 ──────────────────────────────────
+  function addLayerFromData(key, d) {
+    if (layerMap[key]) return;
+    const isRed = d.type === 'red';
+    const layer = L.polyline(d.points, { color: isRed ? '#D85A30' : '#378ADD', weight: isRed ? 8 : 6, opacity: 0.88 });
+    layer._fbKey = key; layer._fbData = d;
+    let html = '<div class="popup-inner">';
+    html += isRed ? '<div class="popup-type red">🔴 クレーム</div>' : '<div class="popup-type blue">🔵 注意道路</div>';
+    if (!isRed && d.tags && d.tags.length > 0) { html += '<div class="popup-tags">'; d.tags.forEach(t => { html += '<span class="popup-tag">' + t + '</span>'; }); html += '</div>'; }
+    html += '<div class="popup-time"><span>📅 登録：' + formatTs(d.createdAt) + '</span>';
+    if (d.updatedAt && d.updatedAt !== d.createdAt) html += '<span>🔄 更新：' + formatTs(d.updatedAt) + '</span>';
+    html += '</div></div>';
+    layer.bindPopup(html, { closeButton: true, maxWidth: 240 });
+    layer.on('click', ev => { if (mode === 'delete') { L.DomEvent.stopPropagation(ev); askDelete(key, d); } });
+    layer.addTo(map); layerMap[key] = layer;
+  }
+
+  function setMode(m) {
+    if (drawing) cancelDrawing();
+    mode = (mode === m) ? null : m;
+    document.getElementById('btn-red').className    = 'tool-btn' + (mode === 'red'    ? ' active-red'  : '');
+    document.getElementById('btn-blue').className   = 'tool-btn' + (mode === 'blue'   ? ' active-blue' : '');
+    document.getElementById('btn-delete').className = 'tool-btn' + (mode === 'delete' ? ' active-del'  : '');
+    const msgs = { red: 'クレーム：タップで点を追加 → ✓ で確定', blue: '注意道路：タップで点を追加 → ✓ で確定', delete: '削除：消したい線をタップ → 確認後に削除' };
+    setStatus(mode ? msgs[mode] : '同期済み（' + Object.keys(layerMap).length + ' 件）');
+  }
+
+  function onMapClick(e) {
+    if (mode !== 'red' && mode !== 'blue') return;
+    drawing = true; currentPoints.push([e.latlng.lat, e.latlng.lng]);
+    updateTempLine(); document.getElementById('fab-confirm').classList.add('show');
+    setStatus(currentPoints.length + ' 点追加済み — ✓ で確定');
+  }
+
+  function onMapDblClick(e) { if (!drawing) return; currentPoints.push([e.latlng.lat, e.latlng.lng]); finishLine(); }
+
+  function updateTempLine() {
+    if (tempLine) map.removeLayer(tempLine);
+    if (currentPoints.length < 2) return;
+    tempLine = L.polyline(currentPoints, { color: mode === 'red' ? '#D85A30' : '#378ADD', weight: mode === 'red' ? 8 : 6, opacity: 0.4, dashArray: '7,5' }).addTo(map);
+  }
+
+  function finishLine() {
+    if (currentPoints.length < 2) { cancelDrawing(); setStatus('2点以上タップしてから確定してください'); return; }
+    if (tempLine) { map.removeLayer(tempLine); tempLine = null; }
+    document.getElementById('fab-confirm').classList.remove('show');
+    if (mode === 'blue') {
+      pendingPoints = [...currentPoints]; drawing = false; currentPoints = [];
+      selectedTags = []; document.getElementById('tag-dropdown').value = ''; renderSelectedTags();
+      document.getElementById('sheet-type').classList.add('open');
+    } else { saveToFirebase('red', [...currentPoints], []); drawing = false; currentPoints = []; }
+  }
+
+  function cancelDrawing() {
+    drawing = false; currentPoints = [];
+    if (tempLine) { map.removeLayer(tempLine); tempLine = null; }
+    document.getElementById('fab-confirm').classList.remove('show');
+  }
+
+  function addTagFromDropdown(sel) { const v = sel.value; if (!v) return; if (!selectedTags.includes(v)) { selectedTags.push(v); renderSelectedTags(); } sel.value = ''; }
+  function removeTag(tag) { selectedTags = selectedTags.filter(t => t !== tag); renderSelectedTags(); }
+  function renderSelectedTags() {
+    const wrap = document.getElementById('selected-tags'); wrap.innerHTML = '';
+    if (!selectedTags.length) { wrap.innerHTML = '<span class="no-tag">種別未選択（選択なしでも登録できます）</span>'; return; }
+    selectedTags.forEach(tag => { const el = document.createElement('div'); el.className = 'selected-tag'; el.innerHTML = tag + '<span class="remove" onclick="removeTag(\'' + tag + '\')">×</span>'; wrap.appendChild(el); });
+  }
+
+  function confirmSheet() { if (!pendingPoints) { cancelSheet(); return; } saveToFirebase('blue', pendingPoints, [...selectedTags]); pendingPoints = null; document.getElementById('sheet-type').classList.remove('open'); }
+  function cancelSheet() { pendingPoints = null; document.getElementById('sheet-type').classList.remove('open'); setStatus('描画をキャンセルしました'); }
+
+  function askDelete(key, d) {
+    pendingDeleteKey = key;
+    const isRed = d.type === 'red';
+    const tags = (!isRed && d.tags && d.tags.length > 0) ? '（' + d.tags.join('・') + '）' : '';
+    document.getElementById('delete-info').innerHTML =
+      '<strong>' + (isRed ? '🔴 クレーム' : '🔵 注意道路') + '</strong>' + tags + '<br>' +
+      '<span style="font-size:11px;color:#aaa;">' + (d.createdAt ? '登録日：' + formatTs(d.createdAt) : '') + '</span><br><br>この線を削除すると元に戻せません。';
+    document.getElementById('sheet-delete').classList.add('open');
+  }
+
+  function confirmDelete() { if (!pendingDeleteKey) { closeDeleteSheet(); return; } pathsRef.child(pendingDeleteKey).remove(); setSyncDot('syncing'); pendingDeleteKey = null; closeDeleteSheet(); }
+  function cancelDelete() { pendingDeleteKey = null; closeDeleteSheet(); setStatus('削除をキャンセルしました'); }
+  function closeDeleteSheet() { document.getElementById('sheet-delete').classList.remove('open'); }
+
+  function saveToFirebase(type, points, tags) {
+    const now = Date.now(); const newRef = pathsRef.push(); lastAddedKey = newRef.key;
+    newRef.set({ type, points, tags, createdAt: now, updatedAt: now }); setSyncDot('syncing');
+  }
+
+  function undoLast() {
+    if (drawing) { cancelDrawing(); setStatus('描画をキャンセルしました'); return; }
+    if (!lastAddedKey) { setStatus('元に戻す操作はありません'); return; }
+    pendingDeleteKey = lastAddedKey;
+    document.getElementById('delete-info').innerHTML = '直前に追加した線を削除します。<br>元に戻せません。';
+    document.getElementById('sheet-delete').classList.add('open'); lastAddedKey = null;
+  }
+
+  function gotoCurrentLocation() {
+    if (!navigator.geolocation) { setStatus('現在地取得に非対応です'); return; }
+    setStatus('現在地を取得中...');
+    navigator.geolocation.getCurrentPosition(
+      pos => { const ll = [pos.coords.latitude, pos.coords.longitude]; map.setView(ll, 17); L.circleMarker(ll, { radius: 9, color: '#185FA5', fillColor: '#378ADD', fillOpacity: 0.9, weight: 2 }).addTo(map).bindPopup('現在地').openPopup(); setStatus('現在地に移動しました'); },
+      () => setStatus('現在地の取得に失敗しました')
+    );
+  }
+
+  function setStatus(msg) { document.getElementById('status-text').textContent = msg; }
+  function setSyncDot(s)  { document.getElementById('sync-dot').className = s; }
+
+  window.addEventListener('load', initMap);
+</script>
+</body>
+</html>
