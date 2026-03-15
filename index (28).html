@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>狭路チェッカー（国土地理院）</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { height:100%; font-family: system-ui, 'Noto Sans JP', sans-serif; }
+  #map { position:absolute; inset:0; }
+
+  /* ── TOP BAR ── */
+  #topbar {
+    position:absolute; top:12px; left:50%; transform:translateX(-50%);
+    z-index:1000;
+    display:flex; align-items:center; gap:8px;
+    background:rgba(18,18,18,.92);
+    backdrop-filter:blur(10px);
+    border:1px solid rgba(255,255,255,.13);
+    border-radius:40px;
+    padding:7px 14px;
+    white-space:nowrap;
+    max-width:calc(100vw - 24px);
+  }
+  #btn-locate {
+    background:#fff; color:#111; border:none; border-radius:20px;
+    padding:6px 14px; font-size:13px; font-weight:700; cursor:pointer;
+    display:flex; align-items:center; gap:5px; transition:opacity .15s; flex-shrink:0;
+  }
+  #btn-locate:hover { opacity:.82; }
+  #btn-locate:disabled { opacity:.4; cursor:default; }
+  .vdiv { width:1px; height:22px; background:rgba(255,255,255,.2); flex-shrink:0; }
+
+  /* 検索 */
+  #search-wrap { position:relative; display:flex; align-items:center; }
+  #search-input {
+    background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.22);
+    border-radius:20px 0 0 20px; padding:6px 12px; color:#fff; font-size:13px;
+    outline:none; width:190px; transition:border-color .2s;
+  }
+  #search-input::placeholder { color:rgba(255,255,255,.38); }
+  #search-input:focus { border-color:rgba(255,255,255,.5); }
+  #btn-search {
+    background:rgba(255,255,255,.14); border:1px solid rgba(255,255,255,.22);
+    border-left:none; border-radius:0 20px 20px 0;
+    padding:6px 11px; color:#fff; cursor:pointer; display:flex; align-items:center;
+    transition:background .15s;
+  }
+  #btn-search:hover { background:rgba(255,255,255,.26); }
+  #search-results {
+    display:none; position:absolute; top:calc(100% + 6px); left:0; width:310px;
+    background:rgba(22,22,22,.97); border:1px solid rgba(255,255,255,.14);
+    border-radius:10px; overflow:hidden; z-index:2000;
+    box-shadow:0 8px 24px rgba(0,0,0,.55);
+  }
+  #search-results.open { display:block; }
+  .sr-item {
+    padding:9px 14px; color:#ccc; font-size:12px; cursor:pointer;
+    border-bottom:1px solid rgba(255,255,255,.06); line-height:1.4;
+  }
+  .sr-item:last-child { border-bottom:none; }
+  .sr-item:hover { background:rgba(255,255,255,.08); color:#fff; }
+  .sr-item b { color:#fff; font-size:13px; display:block; }
+
+  /* ── LOADING ── */
+  #loading {
+    position:absolute; top:66px; left:50%; transform:translateX(-50%);
+    z-index:1000; background:rgba(18,18,18,.88); backdrop-filter:blur(6px);
+    border-radius:20px; padding:5px 14px;
+    color:rgba(255,255,255,.7); font-size:12px;
+    display:none; align-items:center; gap:7px;
+  }
+  #loading.show { display:flex; }
+  .spin {
+    width:11px; height:11px;
+    border:2px solid rgba(255,255,255,.22); border-top-color:#fff;
+    border-radius:50%; animation:spin .65s linear infinite;
+  }
+  @keyframes spin { to { transform:rotate(360deg); } }
+
+  /* ── GPS MSG ── */
+  #gps-msg {
+    display:none; position:absolute; top:66px; left:50%; transform:translateX(-50%);
+    z-index:1001; background:rgba(22,22,22,.96); backdrop-filter:blur(8px);
+    border:1px solid rgba(255,255,255,.14); border-radius:10px;
+    padding:10px 18px; color:#fff; font-size:13px;
+    max-width:340px; text-align:center; line-height:1.6; white-space:pre-line;
+    box-shadow:0 6px 20px rgba(0,0,0,.5);
+  }
+
+  /* ── LEGEND ── */
+  #legend {
+    position:absolute; bottom:28px; left:12px; z-index:1000;
+    background:rgba(18,18,18,.88); backdrop-filter:blur(8px);
+    border:1px solid rgba(255,255,255,.1); border-radius:10px;
+    padding:11px 15px; display:flex; flex-direction:column; gap:7px;
+    font-size:12px; color:#fff;
+  }
+  .leg { display:flex; align-items:center; gap:9px; }
+  .sw { width:26px; height:5px; border-radius:3px; flex-shrink:0; }
+  .c-ban  { background:#ff2222; box-shadow:0 0 5px #ff2222aa; }
+  .c-slow { background:#ff8800; box-shadow:0 0 5px #ff8800aa; }
+  .c-warn { background:#ffdd00; box-shadow:0 0 4px #ffdd00aa; }
+
+  /* ── ZOOM NOTICE ── */
+  #zoom-notice {
+    position:absolute; top:66px; left:50%; transform:translateX(-50%);
+    z-index:999; background:rgba(18,18,18,.82); backdrop-filter:blur(6px);
+    border-radius:20px; padding:5px 16px;
+    color:rgba(255,200,100,.9); font-size:12px;
+    display:none;
+  }
+  #zoom-notice.show { display:block; }
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div id="topbar">
+  <button id="btn-locate" onclick="getLocation()">
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
+    </svg>
+    現在地
+  </button>
+  <div class="vdiv"></div>
+  <div id="search-wrap">
+    <input id="search-input" type="text" placeholder="住所・地名で検索..."
+      oninput="onSearchInput()" onkeydown="onSearchKey(event)">
+    <button id="btn-search" onclick="doSearch()">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+      </svg>
+    </button>
+    <div id="search-results"></div>
+  </div>
+</div>
+
+<div id="loading"><div class="spin"></div><span id="loading-txt">道路データ取得中...</span></div>
+<div id="gps-msg"></div>
+<div id="zoom-notice">⚠️ ズームレベル14以上で道路データを表示します</div>
+
+<div id="legend">
+  <div style="font-size:11px;color:rgba(255,255,255,.5);margin-bottom:2px;">国土地理院 幅員ランク</div>
+  <div class="leg"><div class="sw c-ban"></div><span>ランク0〜2　通行禁止（〜3m未満）</span></div>
+  <div class="leg"><div class="sw c-slow"></div><span>ランク3　　徐行必須（3〜5.5m）</span></div>
+  <div class="leg"><div class="sw c-warn"></div><span>ランク4　　注意（5.5〜13m）</span></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+// ── MAP ─────────────────────────────────────────────────
+const map = L.map('map', { zoomControl: true }).setView([35.1815, 136.9066], 15);
+
+// 国土地理院 標準地図タイル
+L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+  attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors © <a href="https://carto.com/attributions">CARTO</a> | 道路データ: <a href="https://maps.gsi.go.jp/development/ichiran.html">国土地理院</a>',
+  subdomains: 'abcd',
+  maxZoom: 19,
+}).addTo(map);
+
+const roadLayer = L.layerGroup().addTo(map);
+
+// ── タイル座標変換 ──────────────────────────────────────
+const GSI_ZOOM = 16;
+
+function lngLatToTile(lng, lat, zoom) {
+  const x = Math.floor((lng + 180) / 360 * Math.pow(2, zoom));
+  const latRad = lat * Math.PI / 180;
+  const y = Math.floor((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * Math.pow(2, zoom));
+  return { x, y };
+}
+
+function getVisibleTiles(bounds, zoom) {
+  const nw = lngLatToTile(bounds.getWest(),  bounds.getNorth(), zoom);
+  const se = lngLatToTile(bounds.getEast(),  bounds.getSouth(), zoom);
+  const tiles = [];
+  for (let x = nw.x; x <= se.x; x++)
+    for (let y = nw.y; y <= se.y; y++)
+      tiles.push({ x, y, z: zoom });
+  return tiles;
+}
+
+// ── 道路データ取得・描画 ─────────────────────────────────
+const tileCache = new Map(); // キャッシュ（同タイルの再リクエスト防止）
+let loadTimer, activeRequests = 0;
+
+function scheduleLoad() {
+  clearTimeout(loadTimer);
+  loadTimer = setTimeout(loadRoads, 300);
+}
+
+async function loadRoads() {
+  if (map.getZoom() < 14) {
+    document.getElementById('zoom-notice').classList.add('show');
+    roadLayer.clearLayers();
+    return;
+  }
+  document.getElementById('zoom-notice').classList.remove('show');
+
+  const bounds = map.getBounds();
+  const tiles  = getVisibleTiles(bounds, GSI_ZOOM);
+
+  // 多すぎるタイルは負荷対策でスキップ（最大25枚）
+  if (tiles.length > 25) return;
+
+  const newTiles = tiles.filter(t => !tileCache.has(`${t.z}/${t.x}/${t.y}`));
+  if (newTiles.length === 0) { redraw(); return; }
+
+  activeRequests += newTiles.length;
+  setLoading(true);
+
+  await Promise.all(newTiles.map(async t => {
+    const key = `${t.z}/${t.x}/${t.y}`;
+    const url = `https://cyberjapandata.gsi.go.jp/xyz/experimental_rdcl/${t.z}/${t.x}/${t.y}.geojson`;
+    try {
+      const res  = await fetch(url);
+      if (!res.ok) throw new Error(res.status);
+      const json = await res.json();
+      tileCache.set(key, json);
+    } catch(e) {
+      tileCache.set(key, null); // 失敗もキャッシュしてリトライ抑制
+    } finally {
+      activeRequests--;
+      if (activeRequests <= 0) { activeRequests = 0; setLoading(false); }
+    }
+  }));
+
+  redraw();
+}
+
+function redraw() {
+  roadLayer.clearLayers();
+  const bounds = map.getBounds();
+  const tiles  = getVisibleTiles(bounds, GSI_ZOOM);
+
+  tiles.forEach(t => {
+    const json = tileCache.get(`${t.z}/${t.x}/${t.y}`);
+    if (!json || !json.features) return;
+
+    json.features.forEach(f => {
+      if (!f.geometry) return;
+      const props = f.properties || {};
+      const rank  = parseInt(props.rnkWidth ?? props.RnkWidth ?? -1);
+
+      // ランク5以上（13m超）は表示しない（広い道路は不要）
+      if (rank > 4) return;
+      // ランク -1 (不明) も一応表示
+      let color, weight, opacity, dash;
+
+      if (rank <= 2) {
+        // 0〜2: 通行禁止レベル（〜3m未満）
+        color = '#ff2222'; weight = 4; opacity = .92;
+      } else if (rank === 3) {
+        // 3: 徐行必須（3〜5.5m）
+        color = '#ff8800'; weight = 3; opacity = .85;
+      } else if (rank === 4) {
+        // 4: 注意（5.5〜13m）
+        color = '#ffdd00'; weight = 2; opacity = .7;
+      } else {
+        // 不明
+        color = '#888'; weight = 1; opacity = .4; dash = '4 4';
+      }
+
+      const opts = { color, weight, opacity, lineJoin:'round', lineCap:'round' };
+      if (dash) opts.dashArray = dash;
+
+      // ポップアップ
+      const rankLabels = { 0:'不明', 1:'1.5m未満', 2:'1.5〜3m', 3:'3〜5.5m', 4:'5.5〜13m', 5:'13m以上' };
+      const judgeLabels = { 0:'通行禁止', 1:'通行禁止', 2:'通行禁止', 3:'徐行必須', 4:'注意' };
+      const rankStr  = rankLabels[rank]  ?? '不明';
+      const judgeStr = judgeLabels[rank] ?? '不明';
+      const name = props.rdCtg ?? props.RdCtg ?? '';
+
+      const popup = `
+        <div class="lpop">
+          <span class="badge" style="background:${color};color:${rank===4?'#333':'#fff'}">${judgeStr}</span>
+          <div class="row"><span>幅員ランク</span><span class="val">${rank >= 0 ? rank : '不明'}（${rankStr}）</span></div>
+          ${name ? `<div class="row"><span>道路区分</span><span class="val">${name}</span></div>` : ''}
+        </div>`;
+
+      L.geoJSON(f, {
+        style: () => opts,
+        onEachFeature: (_, layer) => layer.bindPopup(popup)
+      }).addTo(roadLayer);
+    });
+  });
+}
+
+// ── MAP イベント ─────────────────────────────────────────
+map.on('moveend', scheduleLoad);
+map.on('zoomend', scheduleLoad);
+
+// ── GEOLOCATION ──────────────────────────────────────────
+let searchMarker;
+
+function getLocation() {
+  if (!navigator.geolocation) { showMsg('❌ このブラウザはGeolocation非対応です'); return; }
+  if (location.protocol === 'file:') {
+    showMsg('⚠️ ローカルファイル(file://)では位置情報が使えません。\n検索ボックスで場所を入力してください。'); return;
+  }
+  const btn = document.getElementById('btn-locate');
+  btn.disabled = true;
+  showMsg('📡 GPS取得中...');
+  navigator.geolocation.getCurrentPosition(
+    pos => {
+      const { latitude: lat, longitude: lng, accuracy } = pos.coords;
+      map.setView([lat, lng], 16);
+      if (searchMarker) map.removeLayer(searchMarker);
+      searchMarker = L.circleMarker([lat, lng], {
+        radius:7, color:'#fff', fillColor:'#4db8ff', fillOpacity:1, weight:2
+      }).addTo(map).bindPopup('現在地（精度: ±' + Math.round(accuracy) + 'm）').openPopup();
+      btn.disabled = false;
+      showMsg('✅ 取得完了（精度 ±' + Math.round(accuracy) + 'm）', 3000);
+    },
+    err => {
+      btn.disabled = false;
+      const msgs = {
+        1: '🔒 位置情報が拒否されています。\nブラウザの鍵アイコン→「位置情報」を許可してください。',
+        2: '📡 位置情報を取得できませんでした。\n検索ボックスで場所を入力してください。',
+        3: '⏱ タイムアウト。再度押すか検索で場所を指定してください。',
+      };
+      showMsg(msgs[err.code] || '❌ エラー(' + err.code + '): ' + err.message);
+    },
+    { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+  );
+}
+
+// ── SEARCH (Nominatim) ───────────────────────────────────
+let searchResults = [], searchTimer2;
+
+function onSearchInput() {
+  clearTimeout(searchTimer2);
+  const q = document.getElementById('search-input').value.trim();
+  if (q.length < 2) { closeResults(); return; }
+  searchTimer2 = setTimeout(() => nominatimSuggest(q), 400);
+}
+function onSearchKey(e) {
+  if (e.key === 'Enter') doSearch();
+  if (e.key === 'Escape') closeResults();
+}
+async function nominatimSuggest(q) {
+  try {
+    const res  = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=5&countrycodes=jp&q=${encodeURIComponent(q)}`, { headers:{'Accept-Language':'ja'} });
+    const data = await res.json();
+    searchResults = data;
+    const box = document.getElementById('search-results');
+    if (!data.length) {
+      box.innerHTML = '<div class="sr-item" style="color:#888">見つかりません</div>';
+    } else {
+      box.innerHTML = data.map((r,i) => {
+        const disp = r.display_name.split(',').slice(0,3).join(', ');
+        return `<div class="sr-item" onclick="selectResult(${i})"><b>${r.name || r.display_name.split(',')[0]}</b>${disp}</div>`;
+      }).join('');
+    }
+    box.classList.add('open');
+  } catch(e) { console.error(e); }
+}
+function selectResult(i) {
+  const r = searchResults[i]; if (!r) return;
+  map.setView([parseFloat(r.lat), parseFloat(r.lon)], 16);
+  if (searchMarker) map.removeLayer(searchMarker);
+  searchMarker = L.marker([parseFloat(r.lat), parseFloat(r.lon)]).addTo(map)
+    .bindPopup(`<b>${r.name || r.display_name.split(',')[0]}</b>`).openPopup();
+  document.getElementById('search-input').value = r.name || r.display_name.split(',')[0];
+  closeResults();
+}
+function doSearch() {
+  const q = document.getElementById('search-input').value.trim();
+  if (q) nominatimSuggest(q).then(() => { if (searchResults.length) selectResult(0); });
+}
+function closeResults() { document.getElementById('search-results').classList.remove('open'); }
+document.addEventListener('click', e => { if (!document.getElementById('search-wrap').contains(e.target)) closeResults(); });
+
+// ── HELPERS ──────────────────────────────────────────────
+function setLoading(on) {
+  document.getElementById('loading').classList.toggle('show', on);
+}
+let _msgTimer;
+function showMsg(text, ms) {
+  const el = document.getElementById('gps-msg');
+  el.textContent = text; el.style.display = 'block';
+  clearTimeout(_msgTimer);
+  if (ms) _msgTimer = setTimeout(() => { el.style.display='none'; }, ms);
+}
+
+// ── POPUP STYLE ──────────────────────────────────────────
+const ps = document.createElement('style');
+ps.textContent = `
+  .leaflet-popup-content-wrapper { background:#1c1c1c; color:#eee; border-radius:10px; box-shadow:0 6px 20px rgba(0,0,0,.6); padding:0; }
+  .leaflet-popup-content { margin:12px 14px; }
+  .leaflet-popup-tip { background:#1c1c1c; }
+  .leaflet-popup-close-button { color:#777!important; top:8px!important; right:10px!important; }
+  .lpop .badge { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:700; margin-bottom:6px; }
+  .lpop .row { display:flex; justify-content:space-between; gap:12px; font-size:12px; color:#bbb; margin-top:3px; }
+  .lpop .val { color:#fff; font-weight:600; }
+`;
+document.head.appendChild(ps);
+
+// ── INIT ─────────────────────────────────────────────────
+scheduleLoad();
+</script>
+</body>
+</html>
