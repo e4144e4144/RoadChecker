@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>道路判定マップ</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Noto Sans JP', sans-serif;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    header {
+      background: #fff;
+      border-bottom: 1px solid #e0e0e0;
+      padding: 10px 14px;
+      flex-shrink: 0;
+      z-index: 300;
+    }
+    .header-top {
+      display: flex;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .logo { font-size: 15px; font-weight: 700; color: #111; }
+    .header-note { font-size: 10px; color: #bbb; margin-left: auto; }
+
+    .search-row { display: flex; gap: 6px; }
+    .search-wrapper { position: relative; flex: 1; min-width: 0; }
+    .search-input {
+      width: 100%;
+      padding: 8px 12px;
+      border-radius: 8px;
+      border: 1px solid #d0d0d0;
+      font-size: 13px;
+      font-family: 'Noto Sans JP', sans-serif;
+      outline: none;
+      background: #f8f8f8;
+    }
+    .search-input:focus { border-color: #2563eb; background: #fff; }
+
+    #suggestions {
+      position: absolute;
+      top: calc(100% + 4px); left: 0; right: 0;
+      background: #fff;
+      border: 1px solid #e0e0e0;
+      border-radius: 8px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.1);
+      z-index: 500;
+      max-height: 220px;
+      overflow-y: auto;
+      display: none;
+    }
+    #suggestions.show { display: block; }
+    .sug-item {
+      padding: 8px 12px; font-size: 13px;
+      cursor: pointer; border-bottom: 1px solid #f0f0f0;
+      line-height: 1.4; color: #222;
+    }
+    .sug-item:last-child { border-bottom: none; }
+    .sug-item:hover { background: #f0f5ff; }
+    .sug-sub { font-size: 11px; color: #888; }
+
+    .btn {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 7px 13px; border-radius: 8px;
+      border: 1px solid #d0d0d0; background: #fff; color: #333;
+      font-size: 13px; font-family: 'Noto Sans JP', sans-serif;
+      cursor: pointer; white-space: nowrap; font-weight: 500;
+    }
+    .btn:hover { background: #f0f0f0; }
+    .btn.primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+    .btn.primary:hover { background: #1d4ed8; }
+
+    .map-wrapper { position: relative; flex: 1; overflow: hidden; }
+    #map { width: 100%; height: 100%; }
+
+    .bottom-panel {
+      background: #fff;
+      border-top: 1px solid #e0e0e0;
+      padding: 10px 14px;
+      flex-shrink: 0;
+      z-index: 200;
+    }
+    .hint { font-size: 12px; color: #555; }
+    #status { font-size: 11px; color: #999; margin-top: 5px; min-height: 14px; }
+    #status.ok      { color: #16a34a; }
+    #status.error   { color: #dc2626; }
+    #status.loading { color: #d97706; }
+
+    /* ポップアップ */
+    .leaflet-popup-content-wrapper {
+      border-radius: 12px !important;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.15) !important;
+      border: none !important;
+      padding: 0 !important;
+      overflow: hidden;
+    }
+    .leaflet-popup-content {
+      margin: 0 !important;
+      font-family: 'Noto Sans JP', sans-serif;
+    }
+    .leaflet-popup-tip-container { display: none; }
+
+    .popup-card {
+      min-width: 220px;
+    }
+    .popup-header {
+      padding: 10px 14px 8px;
+      border-bottom: 1px solid #f0f0f0;
+    }
+    .popup-name {
+      font-size: 14px; font-weight: 700; color: #111;
+      display: block; margin-bottom: 2px;
+    }
+    .popup-type { font-size: 11px; color: #888; }
+    .popup-body { padding: 10px 14px 12px; }
+    .popup-row {
+      display: flex; align-items: center;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }
+    .popup-row:last-child { margin-bottom: 0; }
+    .popup-label { font-size: 11px; color: #888; }
+    .popup-value { font-size: 13px; font-weight: 700; color: #111; }
+    .popup-badge {
+      display: inline-block;
+      padding: 3px 10px; border-radius: 20px;
+      font-size: 12px; font-weight: 700;
+      margin-top: 6px;
+    }
+    .badge-ok     { background: #dbeafe; color: #1d4ed8; }
+    .badge-narrow { background: #fef3c7; color: #92400e; }
+    .badge-ng     { background: #fee2e2; color: #b91c1c; }
+    .popup-alert {
+      margin-top: 8px;
+      padding: 7px 10px;
+      border-radius: 8px;
+      font-size: 11px;
+      line-height: 1.5;
+    }
+    .alert-narrow { background: #fef3c7; color: #92400e; }
+    .alert-ng     { background: #fee2e2; color: #b91c1c; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="header-top">
+      <div class="logo">道路判定マップ</div>
+      <div class="header-note">幅員データ：国土地理院</div>
+    </div>
+    <div class="search-row">
+      <div class="search-wrapper">
+        <input id="search-input" class="search-input" type="text"
+          placeholder="住所・地名で検索..." autocomplete="off"/>
+        <div id="suggestions"></div>
+      </div>
+      <button class="btn primary" onclick="doSearch()">検索</button>
+      <button class="btn" onclick="getLocation()">📍</button>
+    </div>
+  </header>
+
+  <div class="map-wrapper">
+    <div id="map"></div>
+  </div>
+
+  <div class="bottom-panel">
+    <div class="hint">道路をタップすると幅員・判定が表示されます</div>
+    <div id="status"></div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet.vectorgrid@1.3.0/dist/Leaflet.VectorGrid.bundled.min.js"></script>
+  <script>
+  /* ============================================================
+     判定ロジック
+     地理院ベクトルタイル属性：
+       ftCode   : 2701=一般道 2702=軽車道 2703=徒歩道 2722=自転車道 2723=自転車専用
+       rdCtg    : 0=国道 1=都道府県道 2=市区町村道 3=高速
+       rnkWidth : 0=3m未満 1=3〜5.5m未満 2=5.5〜13m 3=13〜19.5m 4=19.5m以上
+  ============================================================ */
+
+  const WIDTH_LABEL = ['3m未満', '3〜5.5m未満', '5.5〜13m', '13〜19.5m', '19.5m以上', '不明', '不明'];
+  const RDCTG_LABEL = ['国道', '都道府県道', '市区町村道', '高速道路', '', 'その他', '不明'];
+
+  const NG_FTCODES = new Set([2703, 2714, 2722, 2723, 3201, 3202, 3203, 3211, 3212, 3213]);
+
+  function getJudge(props) {
+    const ftCode   = props.ftCode;
+    const rnkWidth = props.rnkWidth;
+    const rdCtg    = props.rdCtg;
+    const priRd    = props.priRd;
+    const cycleRd  = props.cycleRd;
+
+    // 徒歩道・自転車道・河川敷 → NG
+    if (NG_FTCODES.has(ftCode)) {
+      const reasons = {
+        2703: '徒歩道・遊歩道', 2714: '徒歩道',
+        2722: '自転車歩行者道', 2723: '自転車専用道路',
+        3201: '河川敷・庭園路', 3202: '河川敷・庭園路', 3203: '河川敷・庭園路',
+        3211: '公園内通路', 3212: '公園内通路', 3213: '公園内通路',
+      };
+      return { cat: 'ng', reason: reasons[ftCode] || '車両通行不可' };
+    }
+    if (cycleRd === 1) return { cat: 'ng', reason: '自転車専用道路' };
+    if (priRd   === 1) return { cat: 'ng', reason: '私道・私有地内道路' };
+    if (ftCode  === 2702) return { cat: 'narrow', reason: '軽車道（農道・林道レベル）' };
+
+    // 幅員で判定
+    if (rnkWidth === 0) return { cat: 'ng',     reason: '幅員3m未満' };
+    if (rnkWidth === 1) return { cat: 'narrow', reason: '幅員3〜5.5m未満' };
+    if (rnkWidth >= 2 && rnkWidth <= 4) return { cat: 'ok', reason: '' };
+
+    // 幅員不明 → 道路種別で推定
+    if (rdCtg === 0 || rdCtg === 1 || rdCtg === 3) return { cat: 'ok',     reason: '幅員データなし' };
+    return { cat: 'narrow', reason: '幅員データなし（市区町村道以下）' };
+  }
+
+  function buildPopup(props) {
+    const name     = props.name || props.knj || '名称不明';
+    const rdLabel  = RDCTG_LABEL[props.rdCtg] ?? 'その他';
+    const wLabel   = WIDTH_LABEL[props.rnkWidth] ?? '不明';
+    const judge    = getJudge(props);
+
+    const badgeClass = { ok: 'badge-ok', narrow: 'badge-narrow', ng: 'badge-ng' }[judge.cat];
+    const badgeText  = { ok: '✓ 通行可', narrow: '⚠ 要注意', ng: '✕ 通行不可の可能性' }[judge.cat];
+
+    let alertHtml = '';
+    if (judge.cat === 'narrow') {
+      alertHtml = `<div class="popup-alert alert-narrow">⚠ ${judge.reason}<br>大型車（ハイエース等）の通行が困難な可能性があります</div>`;
+    } else if (judge.cat === 'ng') {
+      alertHtml = `<div class="popup-alert alert-ng">🚫 ${judge.reason}<br>車での通行は避けてください</div>`;
+    }
+
+    return `
+      <div class="popup-card">
+        <div class="popup-header">
+          <span class="popup-name">${name}</span>
+          <span class="popup-type">${rdLabel}</span>
+        </div>
+        <div class="popup-body">
+          <div class="popup-row">
+            <span class="popup-label">幅員</span>
+            <span class="popup-value">${wLabel}</span>
+          </div>
+          <div><span class="popup-badge ${badgeClass}">${badgeText}</span></div>
+          ${alertHtml}
+        </div>
+      </div>
+    `;
+  }
+
+  /* ============================================================
+     地図初期化
+  ============================================================ */
+  let centerLat   = 35.1815;
+  let centerLng   = 136.9066;
+  let userMarker  = null;
+  let searchPin   = null;
+  let vectorLayer = null;
+
+  const map = L.map('map', {
+    zoomControl: false,
+    maxZoom: 18,
+  }).setView([centerLat, centerLng], 16);
+
+  L.control.zoom({ position: 'topright' }).addTo(map);
+
+  // OSM標準タイル
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors　幅員：<a href="https://maps.gsi.go.jp/development/ichiran.html">国土地理院</a>',
+    maxZoom: 19,
+  }).addTo(map);
+
+  /* ============================================================
+     地理院ベクトルタイル（透明・タップ検知専用）
+  ============================================================ */
+  function buildVectorLayer() {
+    return L.vectorGrid.protobuf(
+      'https://cyberjapandata.gsi.go.jp/xyz/experimental_bvmap/{z}/{x}/{y}.pbf',
+      {
+        rendererFactory: L.canvas.tile,
+        maxNativeZoom: 17,
+        minZoom: 13,
+        vectorTileLayerStyles: {
+          // 道路は透明な太い線でタップ領域だけ確保
+          road: {
+            weight:  12,
+            color:   'transparent',
+            opacity: 0,
+          },
+          // 他は全部非表示
+          contour: [], building: [], railway: [], river: [], lake: [],
+          coastline: [], waterarea: [], label: [], symbol: [],
+          boundary: [], transp: [], landforma: [], landformp: [],
+          structureline: [],
+        },
+        interactive: true,
+        getFeatureId: f => f.id || (f.properties.ftCode + '_' + f.properties.rnkWidth + '_' + Math.random()),
+      }
+    );
+  }
+
+  function addVectorLayer() {
+    if (vectorLayer) map.removeLayer(vectorLayer);
+    vectorLayer = buildVectorLayer();
+
+    vectorLayer.on('click', function(e) {
+      const props = e.layer.properties;
+
+      // 道路以外は無視
+      if (!props.ftCode || props.ftCode < 2700 || props.ftCode > 3300) return;
+
+      L.popup({ maxWidth: 280, className: '' })
+        .setLatLng(e.latlng)
+        .setContent(buildPopup(props))
+        .openOn(map);
+
+      L.DomEvent.stop(e);
+    });
+
+    vectorLayer.addTo(map);
+  }
+
+  function setStatus(msg, type) {
+    const el = document.getElementById('status');
+    el.textContent = msg; el.className = type || '';
+  }
+
+  /* ============================================================
+     現在地
+  ============================================================ */
+  function getLocation() {
+    if (!navigator.geolocation) { setStatus('位置情報が使えません', 'error'); return; }
+    setStatus('位置情報を取得中...', 'loading');
+    navigator.geolocation.getCurrentPosition(pos => {
+      centerLat = pos.coords.latitude;
+      centerLng = pos.coords.longitude;
+      map.setView([centerLat, centerLng], 17);
+      if (userMarker) map.removeLayer(userMarker);
+      userMarker = L.circleMarker([centerLat, centerLng], {
+        radius: 9, color: '#fff', fillColor: '#f97316', fillOpacity: 1, weight: 3,
+      }).addTo(map).bindPopup('現在地');
+      setStatus('現在地を取得しました', 'ok');
+    }, () => { setStatus('位置情報の取得に失敗しました', 'error'); });
+  }
+
+  /* ============================================================
+     住所検索
+  ============================================================ */
+  let sugTimer = null;
+  const searchInput = document.getElementById('search-input');
+  const sugBox      = document.getElementById('suggestions');
+
+  searchInput.addEventListener('input', () => {
+    clearTimeout(sugTimer);
+    const q = searchInput.value.trim();
+    if (q.length < 2) { hideSug(); return; }
+    sugTimer = setTimeout(() => fetchSug(q), 350);
+  });
+  searchInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { doSearch(); hideSug(); }
+    if (e.key === 'Escape') hideSug();
+  });
+  document.addEventListener('click', e => {
+    if (!e.target.closest('.search-wrapper')) hideSug();
+  });
+
+  async function fetchSug(q) {
+    try {
+      const url  = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=5&accept-language=ja&countrycodes=jp`;
+      const data = await (await fetch(url, { headers: { 'Accept-Language': 'ja' } })).json();
+      if (!data.length) { hideSug(); return; }
+      sugBox.innerHTML = data.map(r => {
+        const parts = r.display_name.split(',');
+        return `<div class="sug-item" data-lat="${r.lat}" data-lng="${r.lon}" data-name="${parts[0].trim()}">
+          ${parts[0].trim()}<div class="sug-sub">${parts.slice(1,3).join(', ').trim()}</div>
+        </div>`;
+      }).join('');
+      sugBox.querySelectorAll('.sug-item').forEach(el => {
+        el.addEventListener('click', () => {
+          searchInput.value = el.dataset.name;
+          moveTo(parseFloat(el.dataset.lat), parseFloat(el.dataset.lng), el.dataset.name);
+          hideSug();
+        });
+      });
+      sugBox.classList.add('show');
+    } catch { hideSug(); }
+  }
+
+  function hideSug() { sugBox.classList.remove('show'); }
+
+  async function doSearch() {
+    const q = searchInput.value.trim();
+    if (!q) return;
+    hideSug();
+    try {
+      const url  = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1&accept-language=ja&countrycodes=jp`;
+      const data = await (await fetch(url, { headers: { 'Accept-Language': 'ja' } })).json();
+      if (!data.length) { setStatus('場所が見つかりませんでした', 'error'); return; }
+      const r = data[0];
+      moveTo(parseFloat(r.lat), parseFloat(r.lon), r.display_name.split(',')[0].trim());
+    } catch { setStatus('検索に失敗しました', 'error'); }
+  }
+
+  function moveTo(lat, lng, name) {
+    centerLat = lat; centerLng = lng;
+    map.setView([lat, lng], 17);
+    if (searchPin) map.removeLayer(searchPin);
+    searchPin = L.marker([lat, lng]).addTo(map).bindPopup(name).openPopup();
+  }
+
+  /* 起動 */
+  addVectorLayer();
+  </script>
+</body>
+</html>
